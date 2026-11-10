@@ -40,7 +40,7 @@ try{var d=document.documentElement,th=localStorage.getItem('sh-theme')||'dark',l
       <p data-i18n="home.sub"></p>
       <div class="hero-actions">
         <a class="btn btn-primary" href="#/jobs"><span data-icon="search" data-size="18"></span><span data-i18n="home.browse"></span></a>
-        <a class="btn btn-ghost" href="#/add"><span data-icon="plus" data-size="18"></span><span data-i18n="home.add"></span></a>
+        <a class="btn btn-ghost" href="#/add" data-lockable><span data-icon="plus" data-size="18"></span><span data-i18n="home.add"></span></a>
       </div>
       <div class="hero-stat" id="home-count"></div>
     </div>
@@ -52,7 +52,7 @@ try{var d=document.documentElement,th=localStorage.getItem('sh-theme')||'dark',l
   <section class="view" data-view="jobs">
     <div class="page-head">
       <h1 data-i18n="jobs.title"></h1>
-      <a class="btn btn-primary btn-sm" href="#/add"><span data-i18n="jobs.add"></span></a>
+      <a class="btn btn-primary btn-sm" href="#/add" data-lockable><span data-i18n="jobs.add"></span></a>
     </div>
     <div class="search-box"><span data-icon="search" data-size="18"></span><input id="flt-q" type="search" autocomplete="off" data-i18n-ph="jobs.search" data-i18n-aria="jobs.search"></div>
     <div class="select-wrap"><select id="flt-wilaya" data-i18n-aria="add.wilaya"></select><span data-icon="chevron" data-size="16"></span></div>
@@ -134,7 +134,7 @@ try{var d=document.documentElement,th=localStorage.getItem('sh-theme')||'dark',l
 <nav class="pillnav" aria-label="Main">
   <a href="#/" data-route="home"><span class="ico" data-icon="home"></span><span class="lbl" data-i18n="nav.home"></span></a>
   <a href="#/jobs" data-route="jobs"><span class="ico" data-icon="briefcase"></span><span class="lbl" data-i18n="nav.jobs"></span></a>
-  <a href="#/add" data-route="add"><span class="ico" data-icon="plus"></span><span class="lbl" data-i18n="nav.add"></span></a>
+  <a href="#/add" data-route="add" data-lockable><span class="ico" data-icon="plus"></span><span class="lbl" data-i18n="nav.add"></span></a>
   <a href="#/account" data-route="account"><span class="ico" id="nav-account-ico"></span><span class="lbl" id="nav-account-lbl"></span></a>
 </nav>
 

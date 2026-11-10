@@ -15,6 +15,12 @@ ES modules need a server (not `file://`):  `npx serve .`  or  `python3 -m http.s
 - **Vercel**: import the folder/repo, Framework = Other, no build command, output = root.
 - **GitHub Pages**: push and enable Pages on the root.
 
+## Auto-translation of job posts
+Each post is translated once at publish time (AR<->FR) with the free MyMemory API and both versions are stored (`srcLang`, `tr`). The site shows the version matching the language selected. If translation is unavailable (daily free quota reached, network), the post is published in its original language only. Optional: set `CONTACT_EMAIL` in `js/translate.js` to raise MyMemory's free daily limit. Posts published before this feature stay in their original language.
+
+## Restricted users
+A restriction created in the developer dashboard is stored in `restrictions/{uid}`. Rules block publishing for that user, the Add buttons show a lock, and the Add page shows the developer's reason.
+
 ## Notes
 - Email verification uses Firebase's official link (a real OTP code would need a backend). Google accounts are verified automatically.
 - Jobs: the latest 200 are loaded once and searched/filtered on the device (Arabic-normalized). For larger volumes, move to server-side queries + pagination.

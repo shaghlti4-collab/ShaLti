@@ -4,9 +4,19 @@ service cloud.firestore {
 
     function signedIn() { return request.auth != null; }
 
-    // ---- users: each user can read/create/update only their own profile ----
+    // Developer accounts: a document admins/{uid} created manually in the Firebase console.
+    function isAdmin() {
+      return signedIn() && exists(/databases/$(database)/documents/admins/$(request.auth.uid));
+    }
+
+    match /admins/{uid} {
+      allow read: if signedIn() && request.auth.uid == uid;   // lets the dashboard check "am I admin?"
+      allow write: if false;                                  // only via console
+    }
+
+    // ---- users: owner reads/creates/updates own profile; developer can read all ----
     match /users/{uid} {
-      allow read: if signedIn() && request.auth.uid == uid;
+      allow read: if (signedIn() && request.auth.uid == uid) || isAdmin();
       allow create: if signedIn() && request.auth.uid == uid
         && request.resource.data.keys().hasOnly(['uid', 'name', 'email', 'photoURL', 'createdAt'])
         && request.resource.data.uid == uid
@@ -21,12 +31,25 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    // ---- restrictions: only the developer writes; a user can read only their own ----
+    match /restrictions/{uid} {
+      allow get: if signedIn() && (request.auth.uid == uid || isAdmin());
+      allow list: if isAdmin();
+      allow create, update: if isAdmin()
+        && request.resource.data.keys().hasOnly(['uid', 'reason', 'by', 'createdAt'])
+        && request.resource.data.uid == uid
+        && request.resource.data.by == request.auth.uid
+        && request.resource.data.reason is string
+        && request.resource.data.reason.size() >= 1 && request.resource.data.reason.size() <= 500;
+      allow delete: if isAdmin();
+    }
+
     // ---- jobs ----
     match /jobs/{jobId} {
 
       function validJob(d) {
-        return d.keys().hasOnly(['jobId', 'userId', 'jobTitle', 'description', 'workPeriod', 'workDays', 'salary', 'wilaya', 'phoneNumber', 'createdAt'])
-          && d.keys().hasAll(['jobId', 'userId', 'jobTitle', 'description', 'workPeriod', 'workDays', 'salary', 'wilaya', 'phoneNumber', 'createdAt'])
+        return d.keys().hasOnly(['jobId', 'userId', 'jobTitle', 'description', 'workPeriod', 'workDays', 'salary', 'wilaya', 'phoneNumber', 'createdAt', 'srcLang', 'tr'])
+          && d.keys().hasAll(['jobId', 'userId', 'jobTitle', 'description', 'workPeriod', 'workDays', 'salary', 'wilaya', 'phoneNumber', 'createdAt', 'srcLang'])
           && d.jobId == jobId
           && d.userId == request.auth.uid
           && d.jobTitle is string && d.jobTitle.size() >= 2 && d.jobTitle.size() <= 80
@@ -39,15 +62,21 @@ service cloud.firestore {
                           'dakhlet-nouadhibou', 'tagant', 'guidimaka', 'tiris-zemmour', 'inchiri',
                           'nouakchott-nord', 'nouakchott-ouest', 'nouakchott-sud']
           && d.phoneNumber is string && d.phoneNumber.matches('^[234][0-9]{7}$')
+          && d.srcLang in ['ar', 'fr']
+          && (!('tr' in d.keys()) || (d.tr is map
+                && d.tr.keys().hasOnly(['jobTitle', 'description'])
+                && d.tr.jobTitle is string && d.tr.jobTitle.size() <= 300
+                && d.tr.description is string && d.tr.description.size() <= 6000))
           && d.createdAt == request.time;
       }
 
-      allow read: if true;                                   // anyone can browse jobs
+      allow read: if true;                                          // anyone can browse jobs
       allow create: if signedIn()
-        && request.auth.token.email_verified == true         // only verified emails can post
-        && validJob(request.resource.data);                  // owner = caller, data validated
-      allow update: if false;                                // no edits (as specified)
-      allow delete: if signedIn() && resource.data.userId == request.auth.uid; // owner only
+        && request.auth.token.email_verified == true                // verified emails only
+        && !exists(/databases/$(database)/documents/restrictions/$(request.auth.uid))  // not restricted
+        && validJob(request.resource.data);
+      allow update: if false;                                       // no edits
+      allow delete: if signedIn() && (resource.data.userId == request.auth.uid || isAdmin()); // owner or developer
     }
 
     match /{document=**} { allow read, write: if false; }
