@@ -23,6 +23,11 @@ export async function addJob(user, data) {
   return { id: ref.id, jobId: ref.id, userId: user.uid, ...data, createdAt: Timestamp.now() };
 }
 
+export async function fetchRestriction(uid) {
+  const snap = await getDoc(doc(db, 'restrictions', uid));
+  return snap.exists() ? snap.data() : null;
+}
+
 export const removeJob = id => deleteDoc(doc(db, 'jobs', id));
 
 export async function ensureUserDoc(user, nameOverride) {

@@ -68,6 +68,9 @@ const dict = {
     'e.popup': 'أُغلقت نافذة Google قبل إتمام الدخول.', 'e.domain': 'نطاق الموقع غير مضاف في إعدادات Firebase Authentication.',
     'e.permission': 'لا تملك صلاحية تنفيذ هذه العملية. تأكد من تأكيد بريدك.', 'e.generic': 'حدث خطأ غير متوقع. أعد المحاولة.',
     'e.disabled': 'هذا الحساب معطّل.',
+    'job.autoTr': 'ترجمة تلقائية', 'job.showOriginal': 'عرض النص الأصلي', 'job.showTranslated': 'عرض الترجمة',
+    'add.trFailed': 'نُشر الإعلان بلغته الأصلية لأن الترجمة التلقائية غير متاحة الآن.',
+    'restr.title': 'تم تقييدك من نشر الوظائف', 'restr.reason': 'السبب', 'restr.contact': 'إذا كنت تعتقد أن هذا خطأ، تواصل مع إدارة شغلتي.',
     'e.inapp': 'تعذّر الدخول بـ Google في هذا المتصفح. افتح الموقع في Chrome أو Safari (وليس داخل واتساب) أو سجّل بالبريد.'
   },
   fr: {
@@ -116,6 +119,9 @@ const dict = {
     'e.popup': 'La fenêtre Google a été fermée avant la fin de la connexion.', 'e.domain': 'Le domaine du site n’est pas autorisé dans Firebase Authentication.',
     'e.permission': 'Action non autorisée. Vérifiez que votre e-mail est confirmé.', 'e.generic': 'Une erreur est survenue. Réessayez.',
     'e.disabled': 'Ce compte est désactivé.',
+    'job.autoTr': 'Traduction automatique', 'job.showOriginal': 'Voir le texte original', 'job.showTranslated': 'Voir la traduction',
+    'add.trFailed': 'L’offre a été publiée dans sa langue d’origine : la traduction automatique est indisponible pour le moment.',
+    'restr.title': 'Vous êtes restreint pour la publication d’offres', 'restr.reason': 'Motif', 'restr.contact': 'Si vous pensez qu’il s’agit d’une erreur, contactez l’administration de Shaghlti.',
     'e.inapp': 'Connexion Google impossible dans ce navigateur. Ouvrez le site dans Chrome ou Safari (pas dans WhatsApp) ou utilisez l’e-mail.'
   }
 };

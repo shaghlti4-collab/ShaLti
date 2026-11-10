@@ -11,7 +11,7 @@ export function filterJobs(jobs, { q = '', wilaya = '' } = {}) {
   return jobs.filter(j => {
     if (wilaya && j.wilaya !== wilaya) return false;
     if (!words.length) return true;
-    const hay = norm(`${j.jobTitle} ${j.description}`);
+    const hay = norm(`${j.jobTitle} ${j.description} ${j.tr?.jobTitle || ''} ${j.tr?.description || ''}`);
     return words.every(w => hay.includes(w));
   });
 }

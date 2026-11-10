@@ -1,12 +1,13 @@
 import { auth } from './firebase-config.js';
 import { t, getLang, wName, dName, WILAYAS, DAYS } from './translations.js';
 import { icon, esc, toast, openModal, setButtonLoading } from './ui.js';
-import { fetchJobs, fetchMyJobs, addJob, removeJob, ensureUserDoc } from './database.js';
+import { fetchJobs, fetchMyJobs, addJob, removeJob, ensureUserDoc, fetchRestriction } from './database.js';
+import { translateJob } from './translate.js';
 import { filterJobs } from './search.js';
 import { resendVerification, refreshUser, errorMessage } from './auth.js';
 
 const $ = s => document.querySelector(s);
-const state = { jobs: [], status: 'idle', q: '', wilaya: '', mine: [], mineStatus: 'idle' };
+const state = { jobs: [], status: 'idle', q: '', wilaya: '', mine: [], mineStatus: 'idle', restriction: null };
 
 /* ---------- helpers ---------- */
 const fmtDate = ts => {
@@ -17,7 +18,11 @@ const fmtDate = ts => {
 const salaryText = n => `${Number(n).toLocaleString('en-US')} ${t('job.currency')}`;
 const daysText = days => (days?.[0] === 'daily' ? t('job.daily') : (days || []).map(dName).join(getLang() === 'ar' ? '، ' : ', '));
 const periodText = p => t(`job.period.${p}`);
-const waLink = j => `https://wa.me/222${j.phoneNumber}?text=${encodeURIComponent(t('job.waText', { title: j.jobTitle }))}`;
+// Show the version that matches the site language (translation is stored at publish time).
+const view = j => (j.srcLang && j.srcLang !== getLang() && j.tr?.jobTitle)
+  ? { title: j.tr.jobTitle, desc: j.tr.description, translated: true }
+  : { title: j.jobTitle, desc: j.description, translated: false };
+const waLink = j => `https://wa.me/222${j.phoneNumber}?text=${encodeURIComponent(t('job.waText', { title: view(j).title }))}`;
 export function normalizePhone(v) {
   let d = String(v).replace(/[\s\-().]/g, '').replace(/[٠-٩]/g, c => '٠١٢٣٤٥٦٧٨٩'.indexOf(c));
   if (d.length > 8) d = d.replace(/^(\+|00)?222/, '');
@@ -29,9 +34,10 @@ const skeletons = n => Array.from({ length: n }, () => `<div class="job-card ske
 const emptyBox = (ico, title, sub, extra = '') => `<div class="empty"><div class="ei">${icon(ico, 28)}</div><b>${esc(title)}</b><span>${esc(sub)}</span>${extra}</div>`;
 
 function jobCard(j, mine = false) {
+  const v = view(j);
   return `<article class="job-card" data-id="${esc(j.id)}" tabindex="0" role="button">
-    <div class="jc-top"><h3>${esc(j.jobTitle)}</h3><span class="chip">${icon('pin', 13)}${esc(wName(j.wilaya))}</span></div>
-    <p class="jc-desc">${esc(j.description)}</p>
+    <div class="jc-top"><h3>${esc(v.title)}</h3><span class="chip">${icon('pin', 13)}${esc(wName(j.wilaya))}</span></div>
+    <p class="jc-desc">${esc(v.desc)}</p>
     <ul class="jc-meta"><li>${icon('clock', 15)}${esc(periodText(j.workPeriod))}</li><li>${icon('calendar', 15)}${esc(daysText(j.workDays))}</li><li class="salary">${icon('wallet', 15)}${esc(salaryText(j.salary))}</li></ul>
     <div class="jc-foot"><span class="jc-date">${esc(fmtDate(j.createdAt))}</span>
       ${mine ? `<button type="button" class="btn btn-ghost btn-sm" data-del="${esc(j.id)}">${icon('trash', 15)}${esc(t('job.delete'))}</button>`
@@ -108,16 +114,24 @@ function openDetail(id) {
   const job = state.jobs.find(j => j.id === id) || state.mine.find(j => j.id === id);
   if (!job) return;
   const owner = auth.currentUser && auth.currentUser.uid === job.userId;
+  const v = view(job);
   const row = (ico, label, val) => `<div>${icon(ico, 18)}<span><small>${esc(label)}</small>${esc(val)}</span></div>`;
   openModal({
-    title: job.jobTitle,
-    html: `<p class="desc">${esc(job.description)}</p><div class="detail-grid">
+    title: v.title,
+    html: `${v.translated ? `<p class="tr-note">${icon('globe', 14)}<span>${esc(t('job.autoTr'))}</span><button type="button" class="link-btn" data-toggle-tr>${esc(t('job.showOriginal'))}</button></p>` : ''}<p class="desc">${esc(v.desc)}</p><div class="detail-grid">
       ${row('pin', t('job.wilaya'), wName(job.wilaya))}${row('clock', t('job.workPeriod'), periodText(job.workPeriod))}
       ${row('calendar', t('job.workDays'), daysText(job.workDays))}${row('wallet', t('job.salary'), salaryText(job.salary))}
       ${row('mail', t('job.posted'), fmtDate(job.createdAt))}</div>
       <div class="modal-actions"><a class="btn btn-wa" href="${esc(waLink(job))}" target="_blank" rel="noopener">${icon('whatsapp', 18)}${esc(t('job.contact'))}</a>
       ${owner ? `<button type="button" class="btn btn-ghost" data-del-modal>${icon('trash', 16)}${esc(t('job.delete'))}</button>` : ''}</div>`,
-    onOpen: el => { const b = el.querySelector('[data-del-modal]'); if (b) b.onclick = () => confirmDelete(job); }
+    onOpen: el => {
+      const b = el.querySelector('[data-del-modal]'); if (b) b.onclick = () => confirmDelete(job);
+      const tg = el.querySelector('[data-toggle-tr]');
+      if (tg) { let orig = false; tg.onclick = () => { orig = !orig;
+        el.querySelector('.modal-head h2').textContent = orig ? job.jobTitle : v.title;
+        el.querySelector('.desc').textContent = orig ? job.description : v.desc;
+        tg.textContent = t(orig ? 'job.showTranslated' : 'job.showOriginal'); }; }
+    }
   });
 }
 
@@ -148,8 +162,13 @@ export function renderAdd(user) {
   const holder = $('#add-verify'), form = $('#job-form');
   holder.innerHTML = '';
   const verified = !!user?.emailVerified;
-  form.hidden = !verified;
-  if (user && !verified) holder.appendChild(verifyCard(user, () => renderAdd(auth.currentUser)));
+  const restricted = !!(user && state.restriction);
+  form.hidden = !verified || restricted;
+  if (restricted) {
+    const box = document.createElement('div'); box.className = 'restricted-card';
+    box.innerHTML = `<h3>${icon('lock', 20)}${esc(t('restr.title'))}</h3><p><b>${esc(t('restr.reason'))}:</b> <span class="reason">${esc(state.restriction.reason)}</span></p><p class="hint">${esc(t('restr.contact'))}</p>`;
+    holder.appendChild(box);
+  } else if (user && !verified) holder.appendChild(verifyCard(user, () => renderAdd(auth.currentUser)));
 }
 
 const setErr = (name, msg) => { const p = $(`#job-form [data-err="${name}"]`); p.textContent = msg || ''; p.closest('.field').classList.toggle('invalid', !!msg); };
@@ -161,6 +180,8 @@ export function initAddForm(onPublished) {
     e.preventDefault();
     const user = auth.currentUser;
     if (!user || !user.emailVerified) return toast(t('e.permission'), 'error');
+    await refreshRestriction(user);
+    if (state.restriction) { renderAdd(user); return; }
     ['title', 'desc', 'period', 'days', 'salary', 'wilaya', 'phone'].forEach(n => setErr(n, ''));
     const title = $('#f-title').value.trim(), desc = $('#f-desc').value.trim();
     const period = form.period.value, daily = form.daysMode.value === 'daily';
@@ -178,7 +199,9 @@ export function initAddForm(onPublished) {
     if (!ok) { form.querySelector('.invalid')?.scrollIntoView({ block: 'center', behavior: 'smooth' }); return; }
     const btn = $('#btn-publish'); setButtonLoading(btn, true);
     try {
-      const job = await addJob(user, { jobTitle: title, description: desc, workPeriod: period, workDays: days, salary, wilaya, phoneNumber: phone });
+      const { srcLang, tr } = await translateJob({ jobTitle: title, description: desc });
+      const job = await addJob(user, { jobTitle: title, description: desc, workPeriod: period, workDays: days, salary, wilaya, phoneNumber: phone, srcLang, ...(tr ? { tr } : {}) });
+      if (!tr) toast(t('add.trFailed'), 'info');
       state.jobs.unshift(job); state.mine.unshift(job);
       form.reset(); $('#days-chips').hidden = true; $('#days-chips').querySelectorAll('input').forEach(i => i.checked = false);
       renderAll(); toast(t('add.success'), 'success'); onPublished();
@@ -219,3 +242,18 @@ export function initJobsEvents() {
 }
 
 export function resetMine() { state.mine = []; state.mineStatus = 'idle'; }
+
+/* ---------- restriction (set by the developer dashboard) ---------- */
+export async function refreshRestriction(user) {
+  const before = JSON.stringify(state.restriction && state.restriction.reason);
+  try { state.restriction = user ? await fetchRestriction(user.uid) : null; } catch (e) { console.warn(e); state.restriction = null; }
+  paintLocks();
+  return before !== JSON.stringify(state.restriction && state.restriction.reason);
+}
+export function paintLocks() {
+  document.querySelectorAll('[data-lockable]').forEach(el => {
+    let l = el.querySelector(':scope > .lock-ico');
+    if (state.restriction) { if (!l) { l = document.createElement('span'); l.className = 'lock-ico'; l.innerHTML = icon('lock', 12); el.appendChild(l); } }
+    else if (l) l.remove();
+  });
+}
