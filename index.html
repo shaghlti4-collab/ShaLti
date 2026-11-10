@@ -10,6 +10,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css">
 <link rel="stylesheet" href="css/style.css">
 <link rel="stylesheet" href="css/auth.css">
 <link rel="stylesheet" href="css/responsive.css">
@@ -93,6 +94,29 @@ try{var d=document.documentElement,th=localStorage.getItem('sh-theme')||'dark',l
     </form>
   </section>
 
+  <!-- PHARMACIES -->
+  <section class="view" data-view="pharmacies">
+    <div class="page-head"><h1 data-i18n="ph.title"></h1></div>
+    <div class="ph-grid">
+      <div class="ph-map-col">
+        <div class="search-box"><span data-icon="search" data-size="18"></span><input id="ph-q" type="search" autocomplete="off" data-i18n-ph="ph.search" data-i18n-aria="ph.search"></div>
+        <div class="ph-filters">
+          <div class="select-wrap"><select id="ph-wilaya" data-i18n-aria="add.wilaya"></select><span data-icon="chevron" data-size="16"></span></div>
+          <div class="select-wrap"><select id="ph-mgh" data-i18n-aria="ph.moughataa"></select><span data-icon="chevron" data-size="16"></span></div>
+          <div class="select-wrap"><select id="ph-status" data-i18n-aria="ph.statusL"></select><span data-icon="chevron" data-size="16"></span></div>
+        </div>
+        <button id="ph-locate" class="btn btn-primary btn-block" type="button"><span data-icon="locate" data-size="18"></span><span id="ph-locate-t"></span></button>
+        <div id="ph-map" class="ph-map"></div>
+        <p id="ph-map-err" class="ph-map-err" hidden data-i18n="ph.mapError"></p>
+      </div>
+      <div class="ph-list-col">
+        <p id="ph-count" class="count"></p>
+        <div id="ph-list" class="job-list ph-list"></div>
+        <button id="ph-more" class="btn btn-ghost btn-block" type="button" hidden style="margin-top:12px"><span data-i18n="ph.more"></span></button>
+      </div>
+    </div>
+  </section>
+
   <!-- ACCOUNT -->
   <section class="view" data-view="account">
     <div class="page-head"><h1 data-i18n="account.title"></h1></div>
@@ -135,12 +159,14 @@ try{var d=document.documentElement,th=localStorage.getItem('sh-theme')||'dark',l
   <a href="#/" data-route="home"><span class="ico" data-icon="home"></span><span class="lbl" data-i18n="nav.home"></span></a>
   <a href="#/jobs" data-route="jobs"><span class="ico" data-icon="briefcase"></span><span class="lbl" data-i18n="nav.jobs"></span></a>
   <a href="#/add" data-route="add" data-lockable><span class="ico" data-icon="plus"></span><span class="lbl" data-i18n="nav.add"></span></a>
+  <a href="#/pharmacies" data-route="pharmacies"><span class="ico" data-icon="pill"></span><span class="lbl" data-i18n="nav.pharmacy"></span></a>
   <a href="#/account" data-route="account"><span class="ico" id="nav-account-ico"></span><span class="lbl" id="nav-account-lbl"></span></a>
 </nav>
 
 <div id="toasts" class="toasts" aria-live="polite"></div>
 <div id="modal-root"></div>
 
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js" defer></script>
 <script type="module" src="js/app.js"></script>
 </body>
 </html>

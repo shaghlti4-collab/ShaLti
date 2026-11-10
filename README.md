@@ -21,6 +21,9 @@ Each post is translated once at publish time (AR<->FR) with the free MyMemory AP
 ## Restricted users
 A restriction created in the developer dashboard is stored in `restrictions/{uid}`. Rules block publishing for that user, the Add buttons show a lock, and the Add page shows the developer's reason.
 
+## Pharmacy guide (دليل صيدلي)
+Leaflet + OpenStreetMap map, search, filters, "near me" (GPS), details and directions. Data lives in the `pharmacies` collection (public read, developer-only write, enforced by `firestore.rules`). No sample data is shipped: the section is empty until the developer imports records from the dashboard. Queries are paginated (50 per page); "near me" reads a latitude band then sorts by distance. Map tiles © OpenStreetMap contributors.
+
 ## Notes
 - Email verification uses Firebase's official link (a real OTP code would need a backend). Google accounts are verified automatically.
 - Jobs: the latest 200 are loaded once and searched/filtered on the device (Arabic-normalized). For larger volumes, move to server-side queries + pagination.

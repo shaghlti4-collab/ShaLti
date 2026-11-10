@@ -79,6 +79,32 @@ service cloud.firestore {
       allow delete: if signedIn() && (resource.data.userId == request.auth.uid || isAdmin()); // owner or developer
     }
 
+    // ---- pharmacies: public read; only the developer writes (import tool in the dashboard) ----
+    match /pharmacies/{pid} {
+      function validPharmacy(d) {
+        return d.keys().hasOnly(['pharmacyId', 'name', 'phone', 'wilaya', 'moughataa', 'neighborhood', 'address', 'latitude', 'longitude', 'openingHours', 'status', 'verificationStatus', 'source', 'updatedAt', 'keywords'])
+          && d.keys().hasAll(['pharmacyId', 'name', 'latitude', 'longitude', 'status', 'verificationStatus', 'updatedAt', 'keywords'])
+          && d.pharmacyId == pid
+          && d.name is string && d.name.size() >= 1 && d.name.size() <= 150
+          && d.latitude is number && d.latitude >= 14 && d.latitude <= 28
+          && d.longitude is number && d.longitude >= -18 && d.longitude <= -4
+          && d.status in ['active', 'closed', 'unknown']
+          && d.verificationStatus in ['verified', 'unverified', 'needs_review']
+          && d.keywords is list && d.keywords.size() <= 150
+          && (!('phone' in d.keys()) || (d.phone is string && d.phone.size() <= 60))
+          && (!('wilaya' in d.keys()) || d.wilaya == '' || d.wilaya in ['hodh-chargui', 'hodh-gharbi', 'assaba', 'gorgol', 'brakna', 'trarza', 'adrar',
+                          'dakhlet-nouadhibou', 'tagant', 'guidimaka', 'tiris-zemmour', 'inchiri', 'nouakchott-nord', 'nouakchott-ouest', 'nouakchott-sud'])
+          && (!('moughataa' in d.keys()) || (d.moughataa is string && d.moughataa.size() <= 100))
+          && (!('neighborhood' in d.keys()) || (d.neighborhood is string && d.neighborhood.size() <= 100))
+          && (!('address' in d.keys()) || (d.address is string && d.address.size() <= 300))
+          && (!('openingHours' in d.keys()) || (d.openingHours is string && d.openingHours.size() <= 300))
+          && (!('source' in d.keys()) || (d.source is string && d.source.size() <= 300));
+      }
+      allow read: if true;
+      allow create, update: if isAdmin() && validPharmacy(request.resource.data);
+      allow delete: if isAdmin();
+    }
+
     match /{document=**} { allow read, write: if false; }
   }
 }
