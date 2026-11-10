@@ -159,3 +159,29 @@ input:focus,textarea:focus{outline:0;border-color:var(--accent)}
 .restricted-card{background:rgba(255,107,107,.1);border:1px solid rgba(255,107,107,.45);border-radius:var(--r);padding:16px;margin-bottom:14px}
 .restricted-card h3{display:flex;align-items:center;gap:8px;color:var(--danger);font-size:15px}
 .restricted-card p{margin-top:8px;font-size:14px;overflow-wrap:anywhere;white-space:pre-wrap}
+
+/* ---- pharmacy guide ---- */
+.pillnav{width:min(480px,calc(100% - 20px));gap:2px}
+.pillnav a{font-size:10.5px}.pillnav a.active{flex:1.25}
+.app.wide{max-width:1100px}
+.ph-filters{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px}
+.ph-filters .select-wrap{margin:0}.ph-filters .select-wrap:first-child{grid-column:1/-1}
+#ph-locate{margin-top:10px}
+.ph-map{height:clamp(260px,42vh,420px);border-radius:var(--r);border:1px solid var(--line);margin-top:12px;overflow:hidden;isolation:isolate}
+.ph-map-err{margin-top:12px;padding:14px;border-radius:var(--r);background:var(--surface);border:1px solid var(--line);color:var(--muted);font-size:13.5px}
+.ph-card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:15px;cursor:pointer;transition:border-color .2s,transform .12s}
+.ph-card:hover{border-color:color-mix(in srgb,var(--accent) 50%,var(--line))}.ph-card h3{overflow-wrap:anywhere}
+.ph-loc{display:flex;gap:6px;align-items:flex-start;color:var(--muted);font-size:13px;margin-top:5px;overflow-wrap:anywhere}
+.ph-loc svg{margin-top:4px}
+.ph-foot{flex-wrap:wrap;justify-content:flex-start}
+.ph-pin-wrap{background:none;border:0}
+.ph-pin{width:30px;height:30px;border-radius:50% 50% 50% 0;background:var(--accent);transform:rotate(-45deg);display:grid;place-items:center;border:2px solid #fff;box-shadow:0 3px 8px rgba(0,0,0,.35)}
+.ph-pin span{transform:rotate(45deg);display:flex;color:#fff}
+.leaflet-container{font-family:inherit;background:var(--surface-2)}
+.leaflet-popup-content-wrapper,.leaflet-popup-tip{background:var(--surface);color:var(--text)}
+.ph-pop{display:grid;gap:6px;min-width:150px;font-size:13px}.ph-pop b{font-size:14px}
+[data-theme="dark"] .leaflet-tile-pane{filter:invert(1) hue-rotate(180deg) brightness(.92) contrast(.88)}
+@media (min-width:900px){
+  .ph-grid{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,1fr);gap:18px;align-items:start}
+  .ph-map-col{position:sticky;top:70px}.ph-map{height:min(62vh,560px)}
+}
