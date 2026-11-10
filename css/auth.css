@@ -1,0 +1,6 @@
+.auth-card{margin-top:14px;display:flex;flex-direction:column;gap:16px}
+.tabs{display:flex;padding:4px;background:var(--surface-2);border-radius:999px;border:1px solid var(--line)}
+.tab{flex:1;height:38px;border-radius:999px;font-weight:600;font-size:14px;color:var(--muted);transition:all .2s}
+.tab.active{background:var(--accent);color:var(--accent-ink)}
+.divider{display:flex;align-items:center;gap:12px;color:var(--muted);font-size:12.5px}
+.divider::before,.divider::after{content:"";flex:1;height:1px;background:var(--line)}

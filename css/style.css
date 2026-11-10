@@ -150,3 +150,12 @@ input:focus,textarea:focus{outline:0;border-color:var(--accent)}
 @keyframes fade{from{opacity:0}}
 @keyframes sheet{from{transform:translateY(40px);opacity:0}}
 @media (prefers-reduced-motion:reduce){*{animation-duration:.01ms!important;transition-duration:.01ms!important}}
+
+.pillnav a{position:relative}
+.lock-ico{display:inline-flex;align-items:center;justify-content:center}
+.pillnav a .lock-ico{position:absolute;top:4px;inset-inline-start:50%;margin-inline-start:4px;width:16px;height:16px;border-radius:50%;background:var(--danger);color:#fff}
+.btn .lock-ico{opacity:.9;margin-inline-start:-2px}
+.tr-note{display:flex;align-items:center;flex-wrap:wrap;gap:6px;color:var(--muted);font-size:12.5px;margin:-2px 0 8px}
+.restricted-card{background:rgba(255,107,107,.1);border:1px solid rgba(255,107,107,.45);border-radius:var(--r);padding:16px;margin-bottom:14px}
+.restricted-card h3{display:flex;align-items:center;gap:8px;color:var(--danger);font-size:15px}
+.restricted-card p{margin-top:8px;font-size:14px;overflow-wrap:anywhere;white-space:pre-wrap}
