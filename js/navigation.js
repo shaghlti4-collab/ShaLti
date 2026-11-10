@@ -1,7 +1,7 @@
 import { t } from './translations.js';
 import { icon } from './ui.js';
 
-export const ROUTES = ['home', 'jobs', 'add', 'account', 'auth'];
+export const ROUTES = ['home', 'jobs', 'add', 'pharmacies', 'account', 'auth'];
 export const currentRoute = () => { const r = location.hash.replace(/^#\/?/, '') || 'home'; return ROUTES.includes(r) ? r : 'home'; };
 export function go(route, replace = false) {
   const url = route === 'home' ? '#/' : `#/${route}`;

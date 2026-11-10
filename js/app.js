@@ -3,6 +3,7 @@ import { t, getLang, setLang, applyI18n } from './translations.js';
 import { hydrateIcons, initTheme, toast } from './ui.js';
 import { watchAuth, initAuthView, logout, syncAuthLang, authState } from './auth.js';
 import { currentRoute, go, showView, updateAccountNav } from './navigation.js';
+import { renderPharmacies } from './pharmacies.js';
 import { loadJobs, renderHome, renderJobs, renderAdd, renderAccount, fillSelects, initAddForm, initJobsEvents, resetMine, refreshRestriction, paintLocks } from './jobs.js';
 
 let user = null, ready = false;
@@ -17,9 +18,11 @@ function handleRoute() {
     r = sessionStorage.getItem('sh-return') || 'account'; sessionStorage.removeItem('sh-return'); go(r, true);
   }
   showView(r);
+  document.querySelector('.app').classList.toggle('wide', r === 'pharmacies');
   if (r === 'home') renderHome();
   if (r === 'jobs') renderJobs();
   if (r === 'add') { renderAdd(user); refreshRestriction(user).then(changed => { if (changed && currentRoute() === 'add') renderAdd(user); }); }
+  if (r === 'pharmacies') renderPharmacies();
   if (r === 'account') renderAccount(user, handleRoute);
 }
 
