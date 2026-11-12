@@ -21,8 +21,12 @@ Each post is translated once at publish time (AR<->FR) with the free MyMemory AP
 ## Restricted users
 A restriction created in the developer dashboard is stored in `restrictions/{uid}`. Rules block publishing for that user, the Add buttons show a lock, and the Add page shows the developer's reason.
 
-## Pharmacy guide (دليل صيدلي)
-Leaflet + OpenStreetMap map, search, filters, "near me" (GPS), details and directions. Data lives in the `pharmacies` collection (public read, developer-only write, enforced by `firestore.rules`). No sample data is shipped: the section is empty until the developer imports records from the dashboard. Queries are paginated (50 per page); "near me" reads a latitude band then sorts by distance. Map tiles © OpenStreetMap contributors.
+## Pharmacy guide (دليل صيدلي) — Google Maps
+Live from Google (Maps JavaScript API + Places API (New)); **no pharmacy data is stored in Firestore**. Features: pharmacies near me (GPS, distance-sorted), text search, wilaya search, "search this area", custom map pins, details sheet (photo, rating, open/closed, hours, reviews, directions, call, share).
+- The key is in `js/config.js`. In Google Cloud Console enable *Maps JavaScript API* + *Places API (New)* + billing, then restrict the key: HTTP referrers = your domain(s), APIs = those two only.
+- The Google script loads only when the guide is opened (map loads are billed). Check current pricing yourself.
+- Google returns at most 20 results per search and does not guarantee every pharmacy is listed.
+- Old data: if you imported pharmacies earlier, you can delete the `pharmacies` collection in the Firestore console (it is no longer used).
 
 ## Notes
 - Email verification uses Firebase's official link (a real OTP code would need a backend). Google accounts are verified automatically.
