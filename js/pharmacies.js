@@ -1,19 +1,40 @@
-import { db } from './firebase-config.js';
-import { collection, query, where, limit, startAfter, getDocs } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
-import { t, getLang, WILAYAS, wName } from './translations.js';
+// Pharmacy guide — Google Maps JavaScript API + Places API (New). No database: everything comes live from Google.
+import { GOOGLE_MAPS_API_KEY } from './config.js';
+import { t, getLang, WILAYAS } from './translations.js';
 import { icon, esc, toast, openModal } from './ui.js';
-import { norm } from './search.js';
 
 const $ = s => document.querySelector(s);
-const PAGE = 50;
-const S = { items: [], cursor: null, hasMore: false, loading: false, error: false, user: null, mgh: new Set(),
-  map: null, layer: null, markers: new Map(), me: null, inited: false, req: 0 };
+const BOUNDS = { north: 27.4, south: 14.5, west: -17.2, east: -4.5 };
+const inMR = p => p.lat >= BOUNDS.south && p.lat <= BOUNDS.north && p.lng >= BOUNDS.west && p.lng <= BOUNDS.east;
+// Keep list fields small (cost): extra details are fetched only when a pharmacy is opened.
+const LIST_FIELDS = ['id', 'displayName', 'formattedAddress', 'location', 'nationalPhoneNumber', 'rating', 'userRatingCount', 'businessStatus'];
+const DETAIL_FIELDS = ['regularOpeningHours', 'utcOffsetMinutes', 'photos', 'reviews', 'websiteURI', 'googleMapsURI', 'internationalPhoneNumber', 'editorialSummary'];
+const RADII = [2000, 5000, 15000, 30000];
+
+const S = { map: null, inited: false, loading: false, user: null, userMk: null, places: [], mk: new Map(), sel: null, radius: 15000,
+  mode: 'idle', query: '', error: null, req: 0, Marker: null, lastSearch: null, ready: false };
+
+/* ---------- loader (script is loaded only when the guide is first opened: map loads are billed) ---------- */
+let gmPromise = null;
+function loadGoogle() {
+  if (gmPromise) return gmPromise;
+  gmPromise = new Promise((resolve, reject) => {
+    if (!GOOGLE_MAPS_API_KEY || GOOGLE_MAPS_API_KEY.startsWith('YOUR')) return reject(new Error('missing key'));
+    window.__gmReady = () => resolve();
+    window.gm_authFailure = () => { S.error = 'key'; showMapError(); renderResults(); };
+    const s = document.createElement('script');
+    s.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(GOOGLE_MAPS_API_KEY)}&v=weekly&loading=async&libraries=places&language=${getLang()}&region=MR&callback=__gmReady`;
+    s.async = true; s.onerror = () => reject(new Error('script failed'));
+    document.head.appendChild(s);
+  });
+  gmPromise.catch(() => { gmPromise = null; });
+  return gmPromise;
+}
 
 /* ---------- helpers ---------- */
-const hasPos = p => Number.isFinite(p.latitude) && Number.isFinite(p.longitude);
-const splitWords = s => norm(s).split(/[^\p{L}\p{N}]+/u).filter(Boolean).map(w => (w.length > 3 && w.startsWith('ال') ? w.slice(2) : w));
-const firstWord = q => (splitWords(q).find(w => w.length >= 2) || '').slice(0, 20);
-const locText = p => [p.wilaya ? wName(p.wilaya) : '', p.moughataa, p.neighborhood].filter(Boolean).join(' · ');
+const coord = (o, k) => (typeof o[k] === 'function' ? o[k]() : o[k]);   // LatLng objects use lat()/lng()
+const pos = p => ({ lat: coord(p.location, 'lat'), lng: coord(p.location, 'lng') });
+const nameOf = p => p.displayName || t('ph.unnamed');
 function distKm(a, b) {
   const R = 6371, r = x => x * Math.PI / 180, dLa = r(b.lat - a.lat), dLn = r(b.lng - a.lng);
   const h = Math.sin(dLa / 2) ** 2 + Math.cos(r(a.lat)) * Math.cos(r(b.lat)) * Math.sin(dLn / 2) ** 2;
@@ -27,210 +48,277 @@ function telHref(phone) {
   else if (!d.startsWith('+') && d.length === 8) d = '+222' + d;
   return 'tel:' + d;
 }
-const dirHref = p => (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent) && 'ontouchend' in document
-  ? `https://maps.apple.com/?daddr=${p.latitude},${p.longitude}`
-  : `https://www.google.com/maps/dir/?api=1&destination=${p.latitude},${p.longitude}&travelmode=driving`);
-const fmtDate = ts => (ts?.toDate ? new Intl.DateTimeFormat(getLang() === 'ar' ? 'ar-u-nu-latn' : 'fr-FR', { day: 'numeric', month: 'short', year: 'numeric' }).format(ts.toDate()) : '');
+const dirHref = p => { const q = pos(p); return `https://www.google.com/maps/dir/?api=1&destination=${q.lat},${q.lng}&destination_place_id=${encodeURIComponent(p.id)}&travelmode=driving`; };
+const mapsHref = p => p.googleMapsURI || `https://www.google.com/maps/search/?api=1&query=${pos(p).lat},${pos(p).lng}&query_place_id=${encodeURIComponent(p.id)}`;
+const stars = r => `<span class="stars" style="--p:${Math.max(0, Math.min(100, (r / 5) * 100))}%" role="img" aria-label="${r}/5"></span>`;
+const distOf = p => (S.user ? distKm(S.user, pos(p)) : null);
+const statusChip = p => (p.businessStatus === 'CLOSED_PERMANENTLY' ? `<span class="badge no">${esc(t('ph.closedPerm'))}</span>`
+  : p.businessStatus === 'CLOSED_TEMPORARILY' ? `<span class="badge no">${esc(t('ph.closedTemp'))}</span>` : '');
 
-/* ---------- filters ---------- */
-const readF = () => ({ q: $('#ph-q').value, wilaya: $('#ph-wilaya').value, mgh: $('#ph-mgh').value, status: $('#ph-status').value });
-function match(p, f) {
-  if (f.wilaya && p.wilaya !== f.wilaya) return false;
-  if (f.mgh && p.moughataa !== f.mgh) return false;
-  if (f.status && p.status !== f.status) return false;
-  const words = splitWords(f.q);
-  if (!words.length) return true;
-  const w = WILAYAS.find(x => x.id === p.wilaya);
-  const hay = norm([p.name, p.moughataa, p.neighborhood, p.address, w?.ar, w?.fr].filter(Boolean).join(' '));
-  return words.every(x => hay.includes(x));
+/* ---------- map styling (follows the site theme) ---------- */
+const DARK = [{ elementType: 'geometry', stylers: [{ color: '#1b2230' }] }, { elementType: 'labels.text.stroke', stylers: [{ color: '#0d111a' }] }, { elementType: 'labels.text.fill', stylers: [{ color: '#8f99ad' }] },
+  { featureType: 'administrative.country', elementType: 'geometry.stroke', stylers: [{ color: '#3d8bff' }] }, { featureType: 'road', elementType: 'geometry', stylers: [{ color: '#2a3448' }] },
+  { featureType: 'road', elementType: 'geometry.stroke', stylers: [{ color: '#1b2230' }] }, { featureType: 'road.highway', elementType: 'geometry', stylers: [{ color: '#3a4863' }] },
+  { featureType: 'water', elementType: 'geometry', stylers: [{ color: '#0b1220' }] }, { featureType: 'poi', stylers: [{ visibility: 'off' }] }, { featureType: 'transit', stylers: [{ visibility: 'off' }] }];
+const LIGHT = [{ featureType: 'poi.business', stylers: [{ visibility: 'off' }] }, { featureType: 'transit', stylers: [{ visibility: 'off' }] }];
+const styleFor = () => (document.documentElement.dataset.theme === 'dark' ? DARK : LIGHT);
+
+/* ---------- custom HTML markers (OverlayView: no deprecated Marker, no Map ID needed) ---------- */
+function makeMarkerClass() {
+  return class extends google.maps.OverlayView {
+    constructor(position, el) { super(); this.position = position; this.el = el; }
+    onAdd() { this.getPanes().overlayMouseTarget.appendChild(this.el); google.maps.OverlayView.preventMapHitsAndGesturesFrom(this.el); }
+    draw() { const pt = this.getProjection()?.fromLatLngToDivPixel(new google.maps.LatLng(this.position)); if (pt) { this.el.style.left = pt.x + 'px'; this.el.style.top = pt.y + 'px'; } }
+    onRemove() { this.el.remove(); }
+  };
 }
-function constraints(f) {
-  const w = firstWord(f.q);
-  if (w) return [where('keywords', 'array-contains', w)];   // server-side text search (word prefixes stored at import)
-  const c = [];
-  if (f.wilaya) c.push(where('wilaya', '==', f.wilaya));
-  if (f.status) c.push(where('status', '==', f.status));
-  if (f.mgh) c.push(where('moughataa', '==', f.mgh));
-  return c;
+function addPin(p, i) {
+  const el = document.createElement('button');
+  el.type = 'button'; el.className = 'ph-mk'; el.style.setProperty('--i', i); el.setAttribute('aria-label', nameOf(p));
+  el.innerHTML = `<span class="ph-pin"><span>${icon('plus', 15)}</span></span>`;
+  el.addEventListener('click', () => select(p.id, { pan: false }));
+  const m = new S.Marker(pos(p), el); m.setMap(S.map); S.mk.set(p.id, m);
 }
-function shown() {
-  const f = readF();
-  const l = S.items.filter(p => hasPos(p) && match(p, f));
-  return S.user ? l.sort((a, b) => a.dist - b.dist).slice(0, 100) : l.sort((a, b) => String(a.name).localeCompare(String(b.name), getLang()));
+function clearPins() { S.mk.forEach(m => m.setMap(null)); S.mk.clear(); }
+function placeMe() {
+  if (S.userMk) S.userMk.setMap(null);
+  const el = document.createElement('div'); el.className = 'ph-me'; el.title = t('ph.you');
+  S.userMk = new S.Marker(S.user, el); S.userMk.setMap(S.map);
 }
 
-/* ---------- data (paginated, never the whole collection) ---------- */
-async function fetchBrowse(id, f, want) {
-  for (let pages = 0; pages < 6; pages++) {
-    const q = query(collection(db, 'pharmacies'), ...constraints(f), ...(S.cursor ? [startAfter(S.cursor)] : []), limit(PAGE));
-    const snap = await getDocs(q);
+/* ---------- searching ---------- */
+async function run(fetcher, mode, title) {
+  const id = ++S.req;
+  S.loading = true; S.error = null; S.mode = mode; S.query = title || ''; $('#ph-loading').hidden = false; $('#ph-area').hidden = true; renderResults();
+  try {
+    let places = await fetcher();
     if (id !== S.req) return;
-    snap.docs.forEach(d => S.items.push({ id: d.id, ...d.data() }));
-    if (snap.docs.length) S.cursor = snap.docs[snap.docs.length - 1];
-    S.hasMore = snap.size === PAGE;
-    if (!S.hasMore || S.items.filter(p => match(p, f)).length >= want) break;
-  }
-}
-async function fetchNearby(id, f) {
-  const { lat, lng } = S.user;
-  let res = [];
-  for (const r of [0.3, 1, 3]) {   // latitude band ≈ 33 km, 111 km, 333 km
-    const snap = await getDocs(query(collection(db, 'pharmacies'), where('latitude', '>=', lat - r), where('latitude', '<=', lat + r), limit(400)));
-    if (id !== S.req) return;
-    res = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(hasPos).map(p => ({ ...p, dist: distKm(S.user, { lat: p.latitude, lng: p.longitude }) }));
-    if (res.filter(p => p.dist <= r * 111 && match(p, f)).length >= 10) break;
-  }
-  S.items = res; S.hasMore = false;
-}
-async function load(reset) {
-  const id = ++S.req, f = readF();
-  if (reset) { S.items = []; S.cursor = null; S.hasMore = false; }
-  S.error = false; S.loading = true; renderList();
-  const want = (reset ? 0 : S.items.filter(p => match(p, f)).length) + PAGE;
-  try { if (S.user) await fetchNearby(id, f); else await fetchBrowse(id, f, want); }
-  catch (e) { console.error(e); if (id === S.req) S.error = true; }
+    places = (places || []).filter(p => p.location && inMR(pos(p)));
+    if (S.user) places.sort((a, b) => distOf(a) - distOf(b));
+    S.places = places; S.sel = null;
+  } catch (e) { console.error(e); if (id === S.req) { S.places = []; S.error = 'search'; } }
   if (id !== S.req) return;
-  S.loading = false;
-  S.items.forEach(p => { if (p.moughataa && (!f.wilaya || p.wilaya === f.wilaya)) S.mgh.add(p.moughataa); });
-  fillSelects(); renderList(); updateMap(reset);
+  S.loading = false; $('#ph-loading').hidden = true;
+  renderResults(); drawPins(true);
+}
+async function nearby(center, radius, mode) {
+  const { Place } = await google.maps.importLibrary('places');
+  S.lastSearch = { center, radius };
+  return run(async () => (await Place.searchNearby({ fields: LIST_FIELDS, locationRestriction: { center, radius }, includedTypes: ['pharmacy'], maxResultCount: 20, rankPreference: 'DISTANCE', language: getLang(), region: 'MR' })).places, mode);
+}
+async function textSearch(text, title) {
+  const { Place } = await google.maps.importLibrary('places');
+  const q = /pharmacie|pharmacy|صيدلي|صيدليات/i.test(text) ? text : `${text} pharmacie`;
+  const where = S.user ? { locationBias: { center: S.user, radius: 30000 } } : { locationRestriction: new google.maps.LatLngBounds({ lat: BOUNDS.south, lng: BOUNDS.west }, { lat: BOUNDS.north, lng: BOUNDS.east }) };
+  return run(async () => (await Place.searchByText({ textQuery: q, fields: LIST_FIELDS, includedType: 'pharmacy', maxResultCount: 20, language: getLang(), region: 'MR', ...where })).places, 'search', title);
+}
+function doSearch() {
+  const q = $('#ph-q').value.trim();
+  if (!q) return $('#ph-q').focus();
+  $('#ph-wilaya').value = '';
+  textSearch(q, q);
+}
+function onWilaya() {
+  const id = $('#ph-wilaya').value; if (!id) return;
+  const w = WILAYAS.find(x => x.id === id);
+  $('#ph-q').value = '';
+  textSearch(`pharmacie ${w.fr}`, w[getLang()]);
+}
+function searchArea() {
+  const b = S.map.getBounds(), c = S.map.getCenter(); if (!b) return;
+  const center = { lat: c.lat(), lng: c.lng() }, ne = b.getNorthEast();
+  const radius = Math.max(500, Math.min(50000, distKm(center, { lat: ne.lat(), lng: ne.lng() }) * 1000));
+  nearby(center, radius, 'area');
 }
 
-/* ---------- UI ---------- */
-export function fillSelects() {
-  const w = $('#ph-wilaya'), m = $('#ph-mgh'), s = $('#ph-status');
-  const wv = w.value, mv = m.value, sv = s.value;
+/* ---------- rendering ---------- */
+function fillSelects() {
+  const w = $('#ph-wilaya'), v = w.value;
   w.innerHTML = `<option value="">${esc(t('jobs.allWilayas'))}</option>` + WILAYAS.map(x => `<option value="${x.id}">${esc(x[getLang()])}</option>`).join('');
-  w.value = wv;
-  m.innerHTML = `<option value="">${esc(t('ph.allMoughataa'))}</option>` + [...S.mgh].sort((a, b) => a.localeCompare(b, getLang())).map(x => `<option value="${esc(x)}">${esc(x)}</option>`).join('');
-  m.value = mv;
-  s.innerHTML = `<option value="">${esc(t('ph.allStatus'))}</option>` + ['active', 'closed'].map(x => `<option value="${x}">${esc(t('ph.status.' + x))}</option>`).join('');
-  s.value = sv;
-}
-function paintLocate() {
-  const b = $('#ph-locate-t'); if (b) b.textContent = t(S.user ? 'ph.locateOff' : 'ph.locate');
+  w.value = v;
+  $('#ph-radius').innerHTML = RADII.map(r => `<button type="button" data-r="${r}" class="${r === S.radius ? 'on' : ''}">${r / 1000} ${esc(t('ph.km'))}</button>`).join('');
 }
 const skeleton = n => Array.from({ length: n }, () => '<div class="ph-card skeleton"><div class="sk" style="height:18px;width:50%"></div><div class="sk" style="height:12px;margin:12px 0 8px"></div><div class="sk" style="height:32px;margin-top:14px"></div></div>').join('');
-const empty = (ico, title, sub, extra = '') => `<div class="empty"><div class="ei">${icon(ico, 28)}</div><b>${esc(title)}</b><span>${esc(sub)}</span>${extra}</div>`;
+const box = (ico, title, sub, extra = '') => `<div class="empty"><div class="ei">${icon(ico, 28)}</div><b>${esc(title)}</b><span>${esc(sub)}</span>${extra}</div>`;
 
 function card(p) {
-  return `<article class="ph-card" data-pid="${esc(p.id)}" tabindex="0" role="button">
-    <div class="jc-top"><h3>${esc(p.name)}</h3>${p.dist != null ? `<span class="chip">${icon('locate', 13)}≈ ${esc(fmtDist(p.dist))}</span>` : ''}</div>
-    ${locText(p) ? `<p class="ph-loc">${icon('pin', 14)}<span>${esc(locText(p))}</span></p>` : ''}
-    ${p.phone ? `<p class="ph-loc">${icon('phone', 14)}<span dir="ltr">${esc(p.phone)}</span></p>` : ''}
-    <div class="jc-foot ph-foot">
-      <button type="button" class="btn btn-ghost btn-sm" data-ph-map="${esc(p.id)}">${icon('map', 15)}${esc(t('ph.showOnMap'))}</button>
-      <button type="button" class="btn btn-ghost btn-sm" data-ph-detail="${esc(p.id)}">${esc(t('ph.details'))}</button>
-      ${p.phone ? `<a class="btn btn-primary btn-sm" href="${esc(telHref(p.phone))}">${icon('phone', 15)}${esc(t('ph.call'))}</a>` : ''}
-    </div></article>`;
+  const d = distOf(p), ph = p.nationalPhoneNumber;
+  return `<article class="ph-card ${S.sel === p.id ? 'sel' : ''}" data-pid="${esc(p.id)}" tabindex="0" role="button">
+    <div class="ph-card-top"><span class="ph-av">${icon('pill', 20)}</span><div style="flex:1;min-width:0"><h3>${esc(nameOf(p))}</h3><p class="ph-addr">${esc(p.formattedAddress || t('ph.noAddress'))}</p></div>
+    ${d != null ? `<span class="chip">${icon('locate', 13)}≈ ${esc(fmtDist(d))}</span>` : ''}</div>
+    <div class="ph-meta">${p.rating ? `${stars(p.rating)}<span>${p.rating.toFixed(1)} · ${esc(t('ph.ratings', { n: p.userRatingCount || 0 }))}</span>` : ''}${statusChip(p)}</div>
+    <div class="jc-foot ph-foot"><a class="btn btn-primary btn-sm" href="${esc(dirHref(p))}" target="_blank" rel="noopener">${icon('nav', 15)}${esc(t('ph.directions'))}</a>
+      ${ph ? `<a class="btn btn-ghost btn-sm" href="${esc(telHref(ph))}">${icon('phone', 15)}${esc(t('ph.call'))}</a>` : ''}</div></article>`;
 }
-function renderList() {
-  const list = $('#ph-list'), count = $('#ph-count'), more = $('#ph-more');
-  more.hidden = true;
-  if (S.loading && !S.items.length) { count.textContent = t('common.loading'); list.innerHTML = skeleton(3); return; }
-  if (S.error) { count.textContent = ''; list.innerHTML = empty('alert', t('ph.loadError'), t('jobs.loadErrorSub'), `<button class="btn btn-ghost btn-sm" data-ph-retry>${esc(t('jobs.retry'))}</button>`); return; }
-  const l = shown(), f = readF();
-  const filtered = f.q.trim() || f.wilaya || f.mgh || f.status;
-  count.textContent = l.length ? t('ph.count', { n: l.length + (S.hasMore ? '+' : '') }) : '';
-  list.innerHTML = l.length ? l.map(card).join('') : (!S.items.length && !filtered && !S.user ? empty('pill', t('ph.noneTitle'), t('ph.noneSub')) : empty('search', t('ph.emptyTitle'), t('ph.emptySub')));
-  more.hidden = !S.hasMore; more.disabled = S.loading;
+function renderResults() {
+  const list = $('#ph-list'), title = $('#ph-title'), count = $('#ph-count');
+  title.textContent = S.mode === 'nearby' ? t('ph.titleNearby') : S.mode === 'search' ? t('ph.titleSearch', { q: S.query }) : S.mode === 'area' ? t('ph.titleArea') : t('ph.titleIdle');
+  count.textContent = S.places.length && !S.loading ? t('ph.count', { n: S.places.length }) : '';
+  if (S.error === 'key') { list.innerHTML = box('alert', t('ph.error'), t('ph.keyError')); return; }
+  if (S.loading) { list.innerHTML = skeleton(3); return; }
+  if (S.error) { list.innerHTML = box('alert', t('ph.error'), t('ph.errorSub'), `<button class="btn btn-ghost btn-sm" data-ph-retry>${esc(t('jobs.retry'))}</button>`); return; }
+  if (S.mode === 'idle') { list.innerHTML = box('locate', t('ph.startTitle'), t('ph.startSub'), `<button class="btn btn-primary btn-sm" data-ph-locate>${icon('locate', 16)}${esc(t('ph.locate'))}</button>`); return; }
+  list.innerHTML = S.places.length ? S.places.map(card).join('') : box('search', t('ph.emptyTitle'), t('ph.emptySub'));
+  renderPeek();
+}
+function drawPins(fit) {
+  if (!S.map) return;
+  clearPins();
+  const b = new google.maps.LatLngBounds();
+  S.places.forEach((p, i) => { addPin(p, i); b.extend(pos(p)); });
+  if (S.user) b.extend(S.user);
+  if (fit && S.places.length) {
+    S.progr = true;
+    if (S.places.length === 1) { S.map.setCenter(pos(S.places[0])); S.map.setZoom(16); } else S.map.fitBounds(b, { top: 60, bottom: 90, left: 70, right: 30 });
+    setTimeout(() => { S.progr = false; }, 800);
+  }
+}
+function renderPeek() {
+  const el = $('#ph-peek'), p = S.sel && S.places.find(x => x.id === S.sel);
+  if (!p) { el.hidden = true; return; }
+  const d = distOf(p);
+  el.hidden = false;
+  el.innerHTML = `<button class="peek-x" type="button" data-ph-peek-x aria-label="${esc(t('common.close'))}">${icon('x', 14)}</button>
+    <div class="ph-peek-body" data-ph-detail="${esc(p.id)}"><b>${esc(nameOf(p))}</b><small>${esc(p.formattedAddress || '')}</small>
+    <div class="ph-meta">${p.rating ? `${stars(p.rating)}<span>${p.rating.toFixed(1)}</span>` : ''}${d != null ? `<span>≈ ${esc(fmtDist(d))}</span>` : ''}${statusChip(p)}</div></div>
+    <div class="ph-peek-actions"><a class="btn btn-primary btn-sm" href="${esc(dirHref(p))}" target="_blank" rel="noopener">${icon('nav', 15)}${esc(t('ph.directions'))}</a>
+    <button class="btn btn-ghost btn-sm" type="button" data-ph-detail="${esc(p.id)}">${esc(t('ph.details'))}</button></div>`;
+}
+function select(id, { pan = true } = {}) {
+  S.sel = id;
+  S.mk.forEach((m, k) => m.el.classList.toggle('sel', k === id));
+  document.querySelectorAll('.ph-card').forEach(c => c.classList.toggle('sel', c.dataset.pid === id));
+  const p = S.places.find(x => x.id === id);
+  if (p && pan && S.map) { S.progr = true; S.map.panTo(pos(p)); if (S.map.getZoom() < 15) S.map.setZoom(16); setTimeout(() => { S.progr = false; }, 800); }
+  renderPeek();
 }
 
-/* ---------- map ---------- */
-function initMap() {
-  if (S.map) return;
-  if (typeof L === 'undefined') { $('#ph-map').hidden = true; $('#ph-map-err').hidden = false; return; }
-  S.map = L.map('ph-map').setView([20.3, -10.5], 5);
-  let failed = 0;
-  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>' })
-    .on('tileerror', () => { if (++failed === 6) toast(t('ph.mapError'), 'error'); }).addTo(S.map);
-  S.layer = L.layerGroup().addTo(S.map);
-}
-const pinIcon = () => L.divIcon({ className: 'ph-pin-wrap', iconSize: [30, 30], iconAnchor: [15, 30], popupAnchor: [0, -28],
-  html: `<div class="ph-pin"><span>${icon('plus', 16)}</span></div>` });
-function updateMap(fit = true) {
-  if (!S.map) return;
-  S.layer.clearLayers(); S.markers.clear();
-  const pts = [];
-  shown().slice(0, 400).forEach(p => {
-    const m = L.marker([p.latitude, p.longitude], { icon: pinIcon(), title: p.name })
-      .bindPopup(`<div class="ph-pop"><b>${esc(p.name)}</b>${locText(p) ? `<div>${esc(locText(p))}</div>` : ''}${p.phone ? `<div dir="ltr">${esc(p.phone)}</div>` : ''}<button type="button" class="btn btn-primary btn-sm" data-ph-detail="${esc(p.id)}">${esc(t('ph.details'))}</button></div>`)
-      .addTo(S.layer);
-    S.markers.set(p.id, m); pts.push([p.latitude, p.longitude]);
-  });
-  if (S.user) pts.push([S.user.lat, S.user.lng]);
-  if (fit && pts.length) S.map.fitBounds(pts, { padding: [30, 30], maxZoom: 15 });
-}
-function placeMe() {
-  if (!S.map) return;
-  if (S.me) S.me.remove();
-  S.me = L.circleMarker([S.user.lat, S.user.lng], { radius: 9, color: '#fff', weight: 3, fillColor: '#3d8bff', fillOpacity: 1 }).addTo(S.map).bindTooltip(t('ph.you'));
-}
-function showOnMap(id) {
-  const p = S.items.find(x => x.id === id), m = S.markers.get(id);
-  if (!p || !S.map || !m) return;
-  $('#ph-map').scrollIntoView({ behavior: 'smooth', block: 'center' });
-  S.map.flyTo([p.latitude, p.longitude], 16, { duration: 0.8 });
-  setTimeout(() => m.openPopup(), 850);
-}
-
-/* ---------- details ---------- */
-function openDetail(id) {
-  const p = S.items.find(x => x.id === id); if (!p) return;
-  const row = (ico, label, val) => (val ? `<div>${icon(ico, 18)}<span><small>${esc(label)}</small>${val}</span></div>` : '');
-  const ver = p.verificationStatus ? `<span class="badge ${p.verificationStatus === 'verified' ? 'ok' : 'no'}">${esc(t('ph.ver.' + p.verificationStatus))}</span>` : '';
-  const st = p.status && p.status !== 'unknown' ? `<span class="badge ${p.status === 'active' ? 'ok' : 'no'}">${esc(t('ph.status.' + p.status))}</span>` : '';
-  openModal({
-    title: p.name,
-    html: `<div class="detail-grid">
-      ${row('phone', t('ph.phone'), p.phone ? `<a dir="ltr" href="${esc(telHref(p.phone))}">${esc(p.phone)}</a>` : '')}
-      ${row('pin', t('job.wilaya'), p.wilaya ? esc(wName(p.wilaya)) : '')}
-      ${row('pin', t('ph.moughataa'), esc(p.moughataa))}${row('pin', t('ph.neighborhood'), esc(p.neighborhood))}${row('map', t('ph.address'), esc(p.address))}
-      ${row('locate', t('ph.coords'), `<span dir="ltr">${p.latitude.toFixed(5)}, ${p.longitude.toFixed(5)}</span>`)}
-      ${row('clock', t('ph.hours'), esc(p.openingHours))}
-      ${row('check', t('ph.statusL') + ' / ' + t('ph.verL'), `${st} ${ver}`.trim())}
-      ${row('mail', t('ph.sourceL'), esc(p.source))}${row('calendar', t('ph.updated'), esc(fmtDate(p.updatedAt)))}</div>
+/* ---------- details sheet ---------- */
+async function openSheet(id) {
+  const p = S.places.find(x => x.id === id); if (!p) return;
+  select(id, { pan: true });
+  const d = distOf(p), ph = p.nationalPhoneNumber;
+  const row = (ico, label, v) => (v ? `<div>${icon(ico, 18)}<span><small>${esc(label)}</small>${v}</span></div>` : '');
+  const m = openModal({
+    title: nameOf(p),
+    html: `<div class="ph-hero" id="ph-hero">${icon('pill', 56)}</div>
+      <div class="ph-badges" id="ph-badges">${p.rating ? `<span class="rate">${stars(p.rating)}<b>${p.rating.toFixed(1)}</b> (${esc(t('ph.ratings', { n: p.userRatingCount || 0 }))})</span>` : ''}${statusChip(p)}${d != null ? `<span class="chip">${icon('locate', 13)}≈ ${esc(fmtDist(d))}</span>` : ''}</div>
+      <div class="detail-grid">${row('pin', t('ph.address'), esc(p.formattedAddress || t('ph.noAddress')))}${row('phone', t('ph.phone'), ph ? `<a dir="ltr" href="${esc(telHref(ph))}">${esc(ph)}</a>` : '')}</div>
       <div class="modal-actions"><a class="btn btn-primary" href="${esc(dirHref(p))}" target="_blank" rel="noopener">${icon('nav', 18)}${esc(t('ph.directions'))}</a>
-      ${p.phone ? `<a class="btn btn-ghost" href="${esc(telHref(p.phone))}">${icon('phone', 16)}${esc(t('ph.call'))}</a>` : ''}</div>`
+        ${ph ? `<a class="btn btn-ghost" href="${esc(telHref(ph))}">${icon('phone', 16)}${esc(t('ph.call'))}</a>` : ''}</div>
+      <div id="ph-more"><div class="sk" style="height:14px;margin:18px 0 8px;width:40%"></div><div class="sk" style="height:60px"></div><p class="ph-note">${esc(t('ph.loadingDetails'))}</p></div>`
   });
+  m.el.querySelector('.modal').classList.add('ph-sheet');
+  try {
+    await p.fetchFields({ fields: DETAIL_FIELDS });
+    if (!document.body.contains(m.el)) return;
+    let open;
+    try { open = await p.isOpen(); } catch { open = undefined; }
+    fillSheet(m.el, p, open);
+  } catch (e) {
+    console.warn(e);
+    const more = m.el.querySelector('#ph-more'); if (more) more.innerHTML = `<p class="ph-note">${esc(t('ph.detailsFail'))}</p>`;
+  }
+}
+function fillSheet(el, p, open) {
+  const hero = el.querySelector('#ph-hero'), badges = el.querySelector('#ph-badges'), more = el.querySelector('#ph-more');
+  const photo = p.photos && p.photos[0];
+  if (photo && hero) {
+    const img = new Image(); img.alt = nameOf(p); img.loading = 'lazy';
+    img.onload = () => { hero.innerHTML = ''; hero.appendChild(img); const by = photo.authorAttributions?.[0]?.displayName; if (by) hero.insertAdjacentHTML('beforeend', `<span class="ph-credit">${esc(t('ph.photoBy', { name: by }))}</span>`); };
+    img.src = photo.getURI({ maxWidth: 900 });
+  }
+  if (open !== undefined && badges && p.businessStatus !== 'CLOSED_PERMANENTLY' && p.businessStatus !== 'CLOSED_TEMPORARILY')
+    badges.insertAdjacentHTML('afterbegin', `<span class="badge ${open ? 'ok' : 'no'}">${esc(t(open ? 'ph.openNow' : 'ph.closedNow'))}</span>`);
+  const today = (new Date().getDay() + 6) % 7;   // Google lists Monday first
+  const hrs = p.regularOpeningHours?.weekdayDescriptions;
+  const revs = (p.reviews || []).slice(0, 3);
+  const share = `<button type="button" class="btn btn-ghost" data-ph-share>${icon('mail', 16)}${esc(t('ph.share'))}</button>`;
+  more.innerHTML = `${p.editorialSummary ? `<p class="ph-sum">${esc(String(p.editorialSummary))}</p>` : ''}
+    ${hrs?.length ? `<div class="ph-sec"><h4>${esc(t('ph.hours'))}</h4><ul class="ph-hours">${hrs.map((h, i) => { const k = h.indexOf(':'); return `<li class="${i === today ? 'today' : ''}"><span>${esc(h.slice(0, k))}</span><span dir="ltr">${esc(h.slice(k + 1).trim())}</span></li>`; }).join('')}</ul></div>` : ''}
+    ${revs.length ? `<div class="ph-sec"><h4>${esc(t('ph.reviews'))}</h4>${revs.map(r => `<div class="ph-rev"><header><b>${esc(r.authorAttribution?.displayName || '')}</b><span>${stars(r.rating || 0)} ${esc(r.relativePublishTimeDescription || '')}</span></header>${r.text ? `<p>${esc(String(r.text))}</p>` : ''}</div>`).join('')}</div>` : ''}
+    <div class="modal-actions sec"><a class="btn btn-ghost" href="${esc(mapsHref(p))}" target="_blank" rel="noopener">${icon('map', 16)}${esc(t('ph.openMaps'))}</a>
+      ${p.websiteURI ? `<a class="btn btn-ghost" href="${esc(p.websiteURI)}" target="_blank" rel="noopener">${icon('globe', 16)}${esc(t('ph.website'))}</a>` : ''}${share}</div>`;
+  more.querySelector('[data-ph-share]').onclick = async () => {
+    const url = mapsHref(p);
+    try { if (navigator.share) await navigator.share({ title: nameOf(p), url }); else { await navigator.clipboard.writeText(url); toast(t('ph.copied'), 'success'); } } catch (e) { /* cancelled */ }
+  };
 }
 
 /* ---------- geolocation ---------- */
-function locate() {
-  if (S.user) { S.user = null; if (S.me) { S.me.remove(); S.me = null; } paintLocate(); return load(true); }
-  if (!navigator.geolocation) return toast(t('ph.geoUnsupported'), 'error');
-  const btn = $('#ph-locate'); btn.disabled = true; $('#ph-locate-t').textContent = t('ph.locating');
-  navigator.geolocation.getCurrentPosition(pos => {
-    S.user = { lat: pos.coords.latitude, lng: pos.coords.longitude };
-    btn.disabled = false; paintLocate(); placeMe(); load(true);
-  }, err => {
-    btn.disabled = false; paintLocate();
-    toast(t(err.code === 1 ? 'ph.geoDenied' : 'ph.geoFail'), 'info');   // manual search keeps working
-  }, { enableHighAccuracy: true, timeout: 12000, maximumAge: 60000 });
+function locate(silent = false) {
+  if (!S.map) return;
+  if (!navigator.geolocation) return silent || toast(t('ph.geoUnsupported'), 'error');
+  const b = $('#ph-locate'); b.disabled = true; b.classList.add('on');
+  navigator.geolocation.getCurrentPosition(async g => {
+    b.disabled = false; b.classList.remove('on');
+    const u = { lat: g.coords.latitude, lng: g.coords.longitude };
+    if (!inMR(u)) { toast(t('ph.outside'), 'info'); return showCountry(); }
+    S.user = u; placeMe(); S.progr = true; S.map.setCenter(u); S.map.setZoom(14); setTimeout(() => { S.progr = false; }, 800);
+    $('#ph-wilaya').value = ''; $('#ph-q').value = '';
+    nearby(u, S.radius, 'nearby');
+  }, err => { b.disabled = false; b.classList.remove('on'); if (!silent) toast(t(err.code === 1 ? 'ph.geoDenied' : 'ph.geoFail'), 'info'); },
+  { enableHighAccuracy: true, timeout: 12000, maximumAge: 60000 });
 }
+function showCountry() {
+  if (!S.map) return;
+  S.progr = true;
+  S.map.fitBounds({ south: BOUNDS.south, west: BOUNDS.west, north: BOUNDS.north, east: BOUNDS.east });
+  setTimeout(() => { S.progr = false; }, 800);
+}
+function showMapError() { const e = $('#ph-maperr'); e.textContent = t('ph.keyError'); e.hidden = false; }
 
 /* ---------- init ---------- */
-function bind() {
-  let timer;
-  $('#ph-q').addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(() => load(true), 350); });
-  $('#ph-wilaya').addEventListener('change', () => { S.mgh = new Set(); $('#ph-mgh').value = ''; load(true); });
-  $('#ph-mgh').addEventListener('change', () => load(true));
-  $('#ph-status').addEventListener('change', () => load(true));
-  $('#ph-locate').addEventListener('click', locate);
-  $('#ph-more').addEventListener('click', () => load(false));
-  document.addEventListener('click', e => {
-    if (e.target.closest('[data-ph-retry]')) return load(true);
-    const d = e.target.closest('[data-ph-detail]'); if (d) return openDetail(d.dataset.phDetail);
-    const m = e.target.closest('[data-ph-map]'); if (m) return showOnMap(m.dataset.phMap);
-    if (e.target.closest('a')) return;
-    const c = e.target.closest('.ph-card[data-pid]'); if (c) showOnMap(c.dataset.pid);
-  });
-  document.addEventListener('keydown', e => {
-    if ((e.key === 'Enter' || e.key === ' ') && e.target.matches?.('.ph-card[data-pid]')) { e.preventDefault(); showOnMap(e.target.dataset.pid); }
-  });
+function toggleExpand(on) {
+  const w = $('#ph-mapwrap'); const next = on ?? !w.classList.contains('full');
+  w.classList.toggle('full', next); document.body.style.overflow = next ? 'hidden' : '';
+  $('#ph-expand').innerHTML = icon(next ? 'shrink' : 'expand', 20);
+  $('#ph-expand').setAttribute('aria-label', t(next ? 'ph.collapse' : 'ph.expand'));
+  if (S.map) setTimeout(() => google.maps.event.trigger(S.map, 'resize'), 80);
 }
-export function renderPharmacies() {
-  fillSelects(); paintLocate();
-  if (!S.inited) { S.inited = true; bind(); initMap(); load(true); }
-  else { renderList(); updateMap(false); }
-  setTimeout(() => S.map && S.map.invalidateSize(), 60);
+function bind() {
+  $('#ph-go').onclick = doSearch;
+  $('#ph-q').addEventListener('keydown', e => { if (e.key === 'Enter') doSearch(); });
+  $('#ph-wilaya').addEventListener('change', onWilaya);
+  $('#ph-radius').addEventListener('click', e => {
+    const b = e.target.closest('[data-r]'); if (!b) return;
+    S.radius = +b.dataset.r; fillSelects();
+    if (S.user && S.mode === 'nearby') nearby(S.user, S.radius, 'nearby');
+  });
+  $('#ph-locate').onclick = () => locate(false);
+  $('#ph-country').onclick = showCountry;
+  $('#ph-expand').onclick = () => toggleExpand();
+  $('#ph-area').onclick = searchArea;
+  document.addEventListener('keydown', e => { if (e.key === 'Escape' && $('#ph-mapwrap').classList.contains('full') && !document.querySelector('.overlay')) toggleExpand(false); });
+  document.addEventListener('click', e => {
+    if (e.target.closest('[data-ph-retry]')) return S.lastSearch ? nearby(S.lastSearch.center, S.lastSearch.radius, S.mode === 'area' ? 'area' : 'nearby') : doSearch();
+    if (e.target.closest('[data-ph-locate]')) return locate(false);
+    if (e.target.closest('[data-ph-peek-x]')) { S.sel = null; S.mk.forEach(m => m.el.classList.remove('sel')); return renderPeek(); }
+    const d = e.target.closest('[data-ph-detail]'); if (d) return openSheet(d.dataset.phDetail);
+    if (e.target.closest('a')) return;
+    const c = e.target.closest('.ph-card[data-pid]'); if (c) openSheet(c.dataset.pid);
+  });
+  document.addEventListener('keydown', e => { if ((e.key === 'Enter' || e.key === ' ') && e.target.matches?.('.ph-card[data-pid]')) { e.preventDefault(); openSheet(e.target.dataset.pid); } });
+  new MutationObserver(() => S.map && S.map.setOptions({ styles: styleFor() })).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+}
+async function initMap() {
+  await loadGoogle();
+  const { Map } = await google.maps.importLibrary('maps');
+  await google.maps.importLibrary('places');
+  S.map = new Map($('#ph-map'), { center: { lat: 20.5, lng: -10.5 }, zoom: 5, mapTypeControl: false, streetViewControl: false, fullscreenControl: false, zoomControl: true,
+    clickableIcons: false, gestureHandling: 'greedy', restriction: { latLngBounds: BOUNDS, strictBounds: false }, styles: styleFor() });
+  S.Marker = makeMarkerClass();
+  const reveal = () => { if (!S.progr && S.mode !== 'idle' && !S.loading) $('#ph-area').hidden = false; };
+  S.map.addListener('dragend', reveal); S.map.addListener('zoom_changed', reveal);
+  S.map.addListener('click', () => { if (S.sel) { S.sel = null; S.mk.forEach(m => m.el.classList.remove('sel')); renderPeek(); } });
+}
+export async function renderPharmacies() {
+  fillSelects();
+  if (!S.inited) {
+    S.inited = true; bind(); renderResults();
+    try { await initMap(); } catch (e) { console.error(e); S.error = 'key'; showMapError(); renderResults(); return; }
+    // Ask for the location automatically only if the user already granted it; otherwise show a clear call-to-action.
+    try { const st = await navigator.permissions?.query({ name: 'geolocation' }); if (st && st.state === 'granted') locate(true); } catch (e) { /* unsupported */ }
+  } else { renderResults(); renderPeek(); }
+  setTimeout(() => S.map && google.maps.event.trigger(S.map, 'resize'), 80);
 }
